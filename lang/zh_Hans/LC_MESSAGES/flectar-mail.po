@@ -3,10 +3,10 @@ msgid ""
 msgstr ""
 "Project-Id-Version: flectar-mail 0.1.0\n"
 "POT-Creation-Date: 2026-10-08 15:01+0000\n"
-"PO-Revision-Date: 2026-09-24 11:59+0000\n"
+"PO-Revision-Date: 2026-10-12 06:09+0000\n"
 "Last-Translator: 6uu1 <translate.flectar.com@696988.xyz>\n"
-"Language-Team: Chinese (Simplified Han script) <https://translate.flectar."
-"com/projects/flectar-mail/mail/zh_Hans/>\n"
+"Language-Team: Chinese (Simplified Han script) <https://"
+"translate.flectar.com/projects/flectar-mail/mail/zh_Hans/>\n"
 "Language: zh_Hans\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
@@ -290,15 +290,15 @@ msgstr "主题偏好已保存。"
 
 #: ui/app.slint:183
 msgid "Message appearance updated for this session."
-msgstr ""
+msgstr "本次会话的消息显示已更新。"
 
 #: ui/app.slint:184
 msgid "Message appearance preference saved."
-msgstr ""
+msgstr "邮件外观偏好已保存。"
 
 #: ui/app.slint:185
 msgid "Could not save message appearance: {}"
-msgstr ""
+msgstr "无法保存邮件外观偏好：{}"
 
 #: ui/app.slint:186
 msgid "Could not save theme: {}"
@@ -378,19 +378,19 @@ msgstr "无法保存窗口框架偏好：{}"
 
 #: ui/app.slint:205
 msgid "At most {} tabs can be open. Close a tab to open another."
-msgstr ""
+msgstr "最多可以打开 {} 个标签页。关闭一个标签页后可打开另一个。"
 
 #: ui/app.slint:206
 msgid "Mail grouping is active for this session."
-msgstr ""
+msgstr "本次会话已启用邮件分组。"
 
 #: ui/app.slint:207
 msgid "Mail grouping preference saved."
-msgstr ""
+msgstr "邮件分组偏好已保存。"
 
 #: ui/app.slint:208
 msgid "Could not save mail grouping preference: {}"
-msgstr ""
+msgstr "无法保存邮件分组偏好设置：{}"
 
 #: ui/app.slint:209
 msgid "Profile changes require local mail data."

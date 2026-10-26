@@ -154,13 +154,15 @@ pub fn set_configured(provider: Provider, client_id: &str, client_secret: &str) 
 }
 
 fn bundled_credentials(provider: Provider) -> Option<(String, Option<String>)> {
-    #[cfg(mobile)]
+    // OHOS uses the loopback redirect broker, which Google accepts for
+    // desktop/installed-app client registrations, not Android client IDs.
+    #[cfg(all(mobile, not(target_env = "ohos")))]
     let (client_id, client_secret) = match provider {
         Provider::Gmail => (option_env!("FLECTAR_GOOGLE_ANDROID_CLIENT_ID"), None),
         Provider::Microsoft => (option_env!("FLECTAR_MICROSOFT_ANDROID_CLIENT_ID"), None),
         Provider::Generic => return None,
     };
-    #[cfg(desktop)]
+    #[cfg(any(desktop, target_env = "ohos"))]
     let (client_id, client_secret) = match provider {
         Provider::Gmail => (
             option_env!("FLECTAR_GOOGLE_DESKTOP_CLIENT_ID"),
@@ -222,13 +224,13 @@ pub fn resolve_credentials(provider: Provider) -> Result<(String, Option<String>
 }
 
 fn bundled_client_id_env(provider: Provider) -> &'static str {
-    #[cfg(mobile)]
+    #[cfg(all(mobile, not(target_env = "ohos")))]
     return match provider {
         Provider::Gmail => "FLECTAR_GOOGLE_ANDROID_CLIENT_ID",
         Provider::Microsoft => "FLECTAR_MICROSOFT_ANDROID_CLIENT_ID",
         Provider::Generic => "",
     };
-    #[cfg(desktop)]
+    #[cfg(any(desktop, target_env = "ohos"))]
     match provider {
         Provider::Gmail => GOOGLE.client_id_env,
         Provider::Microsoft => MICROSOFT.client_id_env,

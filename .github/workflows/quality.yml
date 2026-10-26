@@ -86,6 +86,8 @@ jobs:
         run: bash scripts/blitz-patches.sh verify
       - name: Verify the Fontique patch queue
         run: bash scripts/fontique-patches.sh verify
+      - name: Verify the OHOS font fallback lists
+        run: python3 platform/ohos/scripts/check-font-fallbacks.py
       - name: Verify and test the Parley backport
         run: |
           python3 scripts/verify-parley.py

@@ -24,6 +24,7 @@ const HAN_FONT_FILES: [&str; 2] = [
 /// Registers the platform fonts into Slint's shared fontique collection and
 /// appends a Han fallback. Returns the number of Han fallback families.
 pub fn register_system_fonts() -> usize {
+    let started = std::time::Instant::now();
     let dir = Path::new(SYSTEM_FONT_DIR);
     if !dir.is_dir() {
         return 0;
@@ -111,5 +112,10 @@ pub fn register_system_fonts() -> usize {
     // `font-family: sans-serif` in Blitz) without replacing the app's defaults.
     collection.append_generic_families(GenericFamily::SansSerif, han_families.iter().copied());
 
+    crate::log::info(&format!(
+        "fonts: system registration completed in {:?} ({} Han families)",
+        started.elapsed(),
+        han_families.len()
+    ));
     han_families.len()
 }

@@ -22,6 +22,9 @@ static GATE: OnceLock<Arc<SurfaceGate>> = OnceLock::new();
 /// can block on the compositor's buffer queue, so frames are skipped until
 /// the surface is shown again.
 static VISIBLE: OnceLock<Arc<AtomicBool>> = OnceLock::new();
+/// Last mouse position in surface pixels, used by the hover callback (which
+/// reports only enter/leave, not coordinates).
+static LAST_MOUSE: OnceLock<Mutex<(f32, f32)>> = OnceLock::new();
 
 /// Touch diagnostics: log the first few events so input delivery is visible in
 /// hilog without flooding it.
@@ -126,7 +129,7 @@ pub unsafe fn register(component: *mut ffi::OH_NativeXComponent) -> i32 {
     let mouse_callbacks: &'static mut ffi::OH_NativeXComponent_MouseEvent_Callback =
         Box::leak(Box::new(ffi::OH_NativeXComponent_MouseEvent_Callback {
             DispatchMouseEvent: Some(dispatch_mouse_event),
-            DispatchHoverEvent: None,
+            DispatchHoverEvent: Some(dispatch_hover_event),
         }));
     let rc_mouse =
         unsafe { ffi::OH_NativeXComponent_RegisterMouseEventCallback(component, mouse_callbacks) };
@@ -304,6 +307,7 @@ unsafe extern "C" fn dispatch_mouse_event(
         ffi::OH_NATIVEXCOMPONENT_MOUSE_CANCEL => MouseAction::Cancel,
         _ => return,
     };
+    remember_mouse(mouse.x, mouse.y);
     let button = match mouse.button {
         ffi::OH_NATIVEXCOMPONENT_LEFT_BUTTON => MouseButton::Left,
         ffi::OH_NATIVEXCOMPONENT_RIGHT_BUTTON => MouseButton::Right,
@@ -316,6 +320,38 @@ unsafe extern "C" fn dispatch_mouse_event(
         action,
         button,
     });
+}
+
+/// Hover enter/leave only carries a boolean; remember the last pointer
+/// position from the mouse callback and emit a Slint move/exit event.
+unsafe extern "C" fn dispatch_hover_event(
+    _component: *mut ffi::OH_NativeXComponent,
+    is_hover: bool,
+) {
+    let (x, y) = last_mouse();
+    send(BackendEvent::Mouse {
+        x,
+        y,
+        action: if is_hover {
+            MouseAction::Move
+        } else {
+            MouseAction::Cancel
+        },
+        button: MouseButton::Other,
+    });
+}
+
+fn remember_mouse(x: f32, y: f32) {
+    if let Ok(mut position) = LAST_MOUSE.get_or_init(|| Mutex::new((0.0, 0.0))).lock() {
+        *position = (x, y);
+    }
+}
+
+fn last_mouse() -> (f32, f32) {
+    LAST_MOUSE
+        .get()
+        .and_then(|position| position.lock().ok().map(|position| *position))
+        .unwrap_or((0.0, 0.0))
 }
 
 /// Wheel and touchpad scrolling arrives only through the XComponent UI input

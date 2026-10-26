@@ -233,7 +233,8 @@ HarmonyOS 7.0.0.111 (API 26), 2-in-1 (HUAWEI MateBook Pro):
 The OHOS shell has pure policy tests under `shell/entry/src/test` (Hypium):
 `PickerPolicy`, `ImeFocusState` and `ColorSchemePolicy`. They compile through
 the `hvigor` test task (`UnitTestArkTS`); running the local-test bundle needs
-the SDK previewer binary, which is not part of the minimal device SDK. The
-backend has Rust unit tests (`cargo test -p slint-ohos-backend`) for the
+the SDK previewer binary, which is not part of the minimal device SDK. On
+self-hosted runners without the previewer, `scripts/test-policies.sh` runs the
+same policy classes with Bun as a fallback. The backend has Rust unit tests (`cargo test -p slint-ohos-backend`) for the
 presenter, asset chunking and FFI layouts. `APP=demo` (installed with
 `scripts/run-device.sh`) remains the manual smoke target for backend changes.

@@ -368,6 +368,7 @@ pub(super) unsafe extern "C" fn suspend_preview(
     env: napi_env,
     _info: ffi::napi_callback_info,
 ) -> napi_value {
+    slint_ohos_backend::ohos_info!("mail: suspendPreview requested");
     flectar_mail::suspend_file_preview();
     undefined(env)
 }

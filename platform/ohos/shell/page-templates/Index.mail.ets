@@ -5,11 +5,11 @@ import { inputMethod } from '@kit.IMEKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import { util } from '@kit.ArkTS';
+import { ColorSchemePolicy } from '../common/ColorSchemePolicy';
+import { ImeFocusAction, ImeFocusState } from '../common/ImeFocusState';
+import { PickerPolicy } from '../common/PickerPolicy';
 
 const LOG_TAG = 'FlectarOhos';
-// Keep picker imports bounded: a mail attachment is copied into the app
-// cache, so a mis-picked multi-GB file must not fill the sandbox.
-const MAX_IMPORT_BYTES = 50 * 1024 * 1024;
 // Services the native module invokes from Rust; the closures run on the ArkTS
 // UI thread through a thread-safe function. `pickOpen`/`pickSave` are
 // request/response: the page reports the outcome through `submitBridgeResult`.
@@ -40,10 +40,7 @@ struct Index {
   private nativeModule: FlectarNativeModule | undefined = undefined;
   @StorageLink('flectarColorMode') @Watch('onColorModeChanged') colorMode: number =
     ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET;
-  private imeAttached: boolean = false;
-  private imeAttachPending: boolean = false;
-  private imePassword: boolean | undefined = undefined;
-  private pendingImePassword: boolean | undefined = undefined;
+  private imeFocus: ImeFocusState = new ImeFocusState();
   private windowOffsetX: number = 0;
   private windowOffsetY: number = 0;
   private appBackgroundHandler: () => void = (): void => {
@@ -56,7 +53,7 @@ struct Index {
     this.probeResources();
     try {
       const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      AppStorage.setOrCreate('flectarColorMode', context.config.colorMode ?? -1);
+      AppStorage.setOrCreate('flectarColorMode', context.config.colorMode ?? ColorSchemePolicy.NOT_SET);
       context.eventHub.on('flectarBackground', this.appBackgroundHandler);
     } catch (error) {
       hilog.error(0x0000, LOG_TAG, 'could not read the system color mode: %{public}s',
@@ -97,10 +94,7 @@ struct Index {
       hilog.error(0x0000, LOG_TAG, 'background listener cleanup failed: %{public}s',
         (error as BusinessError).message);
     }
-    this.imeAttached = false;
-    this.imeAttachPending = false;
-    this.imePassword = undefined;
-    this.pendingImePassword = undefined;
+    this.imeFocus.reset();
     this.lastImeCursor = '';
   }
 
@@ -279,45 +273,42 @@ struct Index {
   // controller refuses event subscription until it is attached, so attach
   // first and register the text callbacks once it succeeds. A password field
   // changes the keyboard type, which the controller only reads at attach
-  // time, so a type change detaches and attaches again.
+  // time, so a type change detaches and attaches again. `ImeFocusState` also
+  // keeps the newest focus request while either transition is in flight.
   private showIme(password: boolean): void {
     try {
-      if (this.imeAttachPending) {
-        this.pendingImePassword = password;
+      // A window move does not emit a page lifecycle event; refresh the origin
+      // whenever a field gains focus so the first cursor update is correct.
+      this.updateWindowOffset();
+      const controller = inputMethod.getController();
+      const decision = this.imeFocus.request(password);
+      if (decision.action === ImeFocusAction.Queue) {
         return;
       }
-      const controller = inputMethod.getController();
-      if (this.imeAttached && this.imePassword === password) {
+      if (decision.action === ImeFocusAction.Reuse) {
         controller.showTextInput(inputMethod.RequestKeyboardReason.TOUCH)
           .catch((error: BusinessError): void => {
             hilog.error(0x0000, LOG_TAG, 'IME show failed: %{public}d %{public}s',
               error.code, error.message);
             if (error.code === 12800009 || error.code === 12800003) {
               // The service dropped the client (detached), e.g. after the app
-              // left the foreground. Clear the flag and attach again so the
-              // keyboard can come up on the next focus.
-              this.imeAttached = false;
+              // left the foreground. Reset and attach again so the keyboard
+              // can come up on the next focus.
+              this.imeFocus.reset();
               this.showIme(password);
             }
           });
         return;
       }
-      if (this.imeAttached) {
-        this.imeAttachPending = true;
+      if (decision.action === ImeFocusAction.Detach) {
         controller.detach().then((): void => {
-          this.imeAttached = false;
-          this.imeAttachPending = false;
-          this.imePassword = undefined;
+          const queued = this.imeFocus.completeDetach();
           this.lastImeCursor = '';
-          const pending = this.pendingImePassword;
-          this.pendingImePassword = undefined;
-          this.showIme(pending ?? password);
+          this.showIme(queued ?? password);
         }).catch((error: BusinessError): void => {
-          this.imeAttachPending = false;
-          const pending = this.pendingImePassword;
-          this.pendingImePassword = undefined;
-          if (pending !== undefined) {
-            this.showIme(pending);
+          const queued = this.imeFocus.fail();
+          if (queued !== undefined) {
+            this.showIme(queued);
           }
           hilog.error(0x0000, LOG_TAG, 'IME detach failed: %{public}d %{public}s',
             error.code, error.message);
@@ -337,11 +328,8 @@ struct Index {
       // The touch reason asks the IME service to raise the soft keyboard even
       // when a physical keyboard is attached (a 2in1 policy would otherwise
       // suppress it).
-      this.imeAttachPending = true;
       controller.attach(true, config, inputMethod.RequestKeyboardReason.TOUCH).then((): void => {
-        this.imeAttached = true;
-        this.imeAttachPending = false;
-        this.imePassword = password;
+        const queued = this.imeFocus.completeAttach(password);
         this.lastImeCursor = '';
         // (Re-)register exactly one set of handlers: a stale registration from
         // an earlier attach (or a duplicate one) would double-insert text.
@@ -358,17 +346,13 @@ struct Index {
           this.nativeModule?.imeFunction?.(functionKey.enterKeyType);
         });
         hilog.info(0x0000, LOG_TAG, 'IME attached');
-        const pending = this.pendingImePassword;
-        this.pendingImePassword = undefined;
-        if (pending !== undefined && pending !== password) {
-          this.showIme(pending);
+        if (queued !== undefined && queued !== password) {
+          this.showIme(queued);
         }
       }).catch((error: BusinessError): void => {
-        this.imeAttachPending = false;
-        const pending = this.pendingImePassword;
-        this.pendingImePassword = undefined;
-        if (pending !== undefined && pending !== password) {
-          this.showIme(pending);
+        const queued = this.imeFocus.fail();
+        if (queued !== undefined && queued !== password) {
+          this.showIme(queued);
         }
         hilog.error(0x0000, LOG_TAG, 'IME attach failed: %{public}d %{public}s',
           error.code, error.message);
@@ -382,7 +366,7 @@ struct Index {
   // Slint reports the caret rectangle while the field is focused. The system
   // IME uses it to place the candidate window.
   private imeUpdateCursor(left: number, top: number, width: number, height: number): void {
-    if (!this.imeAttached) {
+    if (!this.imeFocus.isAttached) {
       return;
     }
     const key = `${left},${top},${width},${height}`;
@@ -407,7 +391,7 @@ struct Index {
   }
 
   private hideIme(): void {
-    if (!this.imeAttached) {
+    if (!this.imeFocus.isAttached) {
       return;
     }
     try {
@@ -415,7 +399,7 @@ struct Index {
         hilog.error(0x0000, LOG_TAG, 'IME hide failed: %{public}d', error.code);
         if (error.code === 12800009 || error.code === 12800003) {
           // Already detached on the service side; forget the local state.
-          this.imeAttached = false;
+          this.imeFocus.reset();
         }
       });
     } catch (error) {
@@ -433,6 +417,8 @@ struct Index {
       const rect = appWindow.getWindowProperties().windowRect;
       this.windowOffsetX = rect.left;
       this.windowOffsetY = rect.top;
+      hilog.info(0x0000, LOG_TAG, 'window origin: %{public}d,%{public}d',
+        rect.left, rect.top);
     } catch (error) {
       hilog.error(0x0000, LOG_TAG, 'could not read the window origin: %{public}s',
         (error as BusinessError).message);
@@ -442,7 +428,7 @@ struct Index {
   private applySystemColorScheme(mode: number): void {
     try {
       let colorMode = mode;
-      if (colorMode < 0) {
+      if (colorMode < ColorSchemePolicy.DARK) {
         const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
         colorMode = context.config.colorMode ?? ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET;
       }
@@ -450,8 +436,7 @@ struct Index {
         return;
       }
       this.appliedColorMode = colorMode;
-      this.nativeModule.setColorScheme?.(
-        colorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK);
+      this.nativeModule.setColorScheme?.(ColorSchemePolicy.isDark(colorMode));
     } catch (error) {
       hilog.error(0x0000, LOG_TAG, 'could not apply the system color mode: %{public}s',
         (error as BusinessError).message);
@@ -517,18 +502,16 @@ struct Index {
     const source = await fileIo.open(uri, fileIo.OpenMode.READ_ONLY);
     try {
       const size = (await fileIo.stat(source.fd)).size;
-      if (size > MAX_IMPORT_BYTES) {
-        throw new Error(`the selected file is too large (${size} bytes; limit ${MAX_IMPORT_BYTES})`);
+      if (!PickerPolicy.isAllowedSize(size)) {
+        throw new Error(
+          `the selected file is too large (${size} bytes; limit ${PickerPolicy.MAX_IMPORT_BYTES})`);
       }
       // Never reuse the picked file name (or a predictable timestamp) in the
       // cache: it can leak the user's document name and collide with another
       // staged import. Keep only a short extension for content detection.
-      const raw = uri.split('/').pop() ?? '';
-      const dot = raw.lastIndexOf('.');
-      const extension = dot > 0
-        ? raw.substring(dot).replace(/[^A-Za-z0-9.]/g, '').substring(0, 12)
-        : '';
-      const destination = `${directory}/import-${util.generateRandomUUID(true)}${extension}`;
+      const extension = PickerPolicy.extensionOf(uri);
+      const destination = `${directory}/${PickerPolicy.stagedName(
+        util.generateRandomUUID(true), extension)}`;
       const target = await fileIo.open(
         destination,
         fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE | fileIo.OpenMode.TRUNC,

@@ -3,8 +3,11 @@ import { PickerPolicy } from '../main/ets/common/PickerPolicy';
 
 export default function pickerPolicyTest() {
   describe('PickerPolicyTest', () => {
-    it('accepts sizes inside the import limit', 0, () => {
+    it('enforces the 50 MiB picker cache guard at its boundary', 0, () => {
+      // This is the cache guard, not the shared 25 MiB compose limit.
+      expect(PickerPolicy.MAX_IMPORT_BYTES).assertEqual(50 * 1024 * 1024);
       expect(PickerPolicy.isAllowedSize(0)).assertTrue();
+      expect(PickerPolicy.isAllowedSize(25 * 1024 * 1024)).assertTrue();
       expect(PickerPolicy.isAllowedSize(PickerPolicy.MAX_IMPORT_BYTES)).assertTrue();
       expect(PickerPolicy.isAllowedSize(PickerPolicy.MAX_IMPORT_BYTES + 1)).assertFalse();
       expect(PickerPolicy.isAllowedSize(-1)).assertFalse();

@@ -147,6 +147,13 @@ handled (and asserted) in the script, do not "simplify" them away:
   environment, so the fallback is the safety net. The wgpu GL-backend
   subtleties (why `Backends::GL` must be requested explicitly) are documented
   in `backend/src/gpu.rs`.
+- **Attachment size limits**: two independent limits apply. The OHOS picker
+  has a per-file 50 MiB cache guard (`PickerPolicy`); the shared core enforces
+  the product compose/draft limit of 25 MiB total across attachments (and a
+  20-file cap) on every platform. A 26–50 MiB file is copied by the picker and
+  then rejected by the core; a file above 50 MiB is rejected before staging.
+  The picker guard exists only to keep an accidental multi-GB selection out of
+  the app cache.
 - **System pickers**: the document picker opens in a window over the
   XComponent without hiding it, and frames presented into the covered surface
   leave the window unresponsive once the picker closes. Each pending picker
@@ -203,6 +210,9 @@ HarmonyOS 7.0.0.111 (API 26), 2-in-1 (HUAWEI MateBook Pro):
   attachment preview through the bundled PDFium.
 - Fresh install signed with the AGC release and debug profiles under the AGC
   bundle.
+- Attachment boundaries: a 24 MiB single attachment is accepted by the shared
+  core; 26 MiB is rejected by its 25 MiB total limit; a file above 50 MiB is
+  rejected by the picker cache guard before staging.
 
 ## Known limitations
 
@@ -220,6 +230,10 @@ HarmonyOS 7.0.0.111 (API 26), 2-in-1 (HUAWEI MateBook Pro):
 
 ## Tests
 
-The backend has no automated device-side harness: `cargo test` covers the
-shared crates at the repository root, and `APP=demo` (installed with
-`scripts/run-device.sh`) is the manual smoke target for backend changes.
+The OHOS shell has pure policy tests under `shell/entry/src/test` (Hypium):
+`PickerPolicy`, `ImeFocusState` and `ColorSchemePolicy`. They compile through
+the `hvigor` test task (`UnitTestArkTS`); running the local-test bundle needs
+the SDK previewer binary, which is not part of the minimal device SDK. The
+backend has Rust unit tests (`cargo test -p slint-ohos-backend`) for the
+presenter, asset chunking and FFI layouts. `APP=demo` (installed with
+`scripts/run-device.sh`) remains the manual smoke target for backend changes.

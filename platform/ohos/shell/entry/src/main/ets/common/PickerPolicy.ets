@@ -1,5 +1,11 @@
 // Pure picker policy used by the ArkTS shell; kept free of UI/file APIs so it
 // can be covered by local unit tests on the host.
+//
+// MAX_IMPORT_BYTES is a per-file cache guard for the OHOS picker, not the
+// product attachment limit. The shared core enforces 25 MiB total across all
+// attachments (and across draft attachments) on every platform; files between
+// 25 and 50 MiB pass this guard and are then rejected by the core, while
+// files above 50 MiB are rejected before staging.
 export class PickerPolicy {
   static readonly MAX_IMPORT_BYTES: number = 50 * 1024 * 1024;
 

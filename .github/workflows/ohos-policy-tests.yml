@@ -1,0 +1,39 @@
+name: OHOS policy tests
+
+on:
+  pull_request:
+    paths:
+      - platform/ohos/shell/entry/src/main/ets/common/**
+      - platform/ohos/shell/entry/src/test/**
+      - platform/ohos/scripts/test-policies.sh
+      - .github/workflows/ohos-policy-tests.yml
+  push:
+    # Keep the preparation branch testable before a PR exists; remove this
+    # entry once the tests land on main.
+    branches:
+      - main
+      - ohos-p1-tests
+    paths:
+      - platform/ohos/shell/entry/src/main/ets/common/**
+      - platform/ohos/shell/entry/src/test/**
+      - platform/ohos/scripts/test-policies.sh
+      - .github/workflows/ohos-policy-tests.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ohos-policy-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  policy:
+    name: Picker/IME/color policy tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - name: Run policy tests
+        run: sh platform/ohos/scripts/test-policies.sh

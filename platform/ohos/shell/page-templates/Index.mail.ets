@@ -53,6 +53,7 @@ struct Index {
   private imePassword: boolean | undefined = undefined;
   private pendingImePassword: boolean | undefined = undefined;
   @State private pasteButtonVisible: boolean = false;
+  @State private pasteButtonFallback: boolean = false;
   private windowOffsetX: number = 0;
   private windowOffsetY: number = 0;
   private appBackgroundHandler: () => void = (): void => {
@@ -144,7 +145,7 @@ struct Index {
       // A security component: tapping it grants a temporary pasteboard read
       // authorization without READ_PASTEBOARD. It is only shown while Slint
       // has an editable field focused.
-      if (this.pasteButtonVisible) {
+      if (this.pasteButtonVisible && this.pasteButtonFallback) {
         PasteButton({ icon: PasteIconStyle.LINES, text: PasteDescription.PASTE })
           .onClick((event: ClickEvent, result: PasteButtonOnClickResult,
             error?: BusinessError): void => {
@@ -269,7 +270,11 @@ struct Index {
           (error as BusinessError).message);
       }
       this.nativeModule?.setClipboardText?.(text);
+      // Ctrl+V works through the native cache when READ_PASTEBOARD is
+      // available; the security component is only a fallback.
+      this.pasteButtonFallback = false;
     }).catch((error: BusinessError): void => {
+      this.pasteButtonFallback = true;
       if (error.code === 201) {
         this.requestPasteboardPermission();
       } else {

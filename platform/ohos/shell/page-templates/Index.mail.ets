@@ -581,7 +581,18 @@ struct Index {
       // Never reuse the picked file name (or a predictable timestamp) in the
       // cache: it can leak the user's document name and collide with another
       // staged import. Keep only a short extension for content detection.
-      const raw = uri.split('/').pop() ?? '';
+      // The display name is a separate field; decode the URI basename so a
+      // Chinese or spaced filename is not shown as `%E8%AE%BE...`.
+      let raw = uri.split('/').pop() ?? '';
+      const query = raw.search(/[?#]/);
+      if (query >= 0) {
+        raw = raw.substring(0, query);
+      }
+      try {
+        raw = decodeURIComponent(raw);
+      } catch (error) {
+        // Keep the encoded name rather than failing the attachment import.
+      }
       const dot = raw.lastIndexOf('.');
       const extension = dot > 0
         ? raw.substring(dot).replace(/[^A-Za-z0-9.]/g, '').substring(0, 12)

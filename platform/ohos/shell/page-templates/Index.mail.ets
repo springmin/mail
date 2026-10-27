@@ -52,6 +52,7 @@ struct Index {
   private imeAttachPending: boolean = false;
   private imePassword: boolean | undefined = undefined;
   private pendingImePassword: boolean | undefined = undefined;
+  @State private pasteButtonVisible: boolean = false;
   private windowOffsetX: number = 0;
   private windowOffsetY: number = 0;
   private appBackgroundHandler: () => void = (): void => {
@@ -125,7 +126,7 @@ struct Index {
   }
 
   build(): void {
-    Column() {
+    Stack({ alignContent: Alignment.BottomEnd }) {
       XComponent({
         id: 'flectar_mail_surface',
         type: XComponentType.SURFACE,
@@ -140,9 +141,45 @@ struct Index {
             this.installBridge(context);
           }
         })
+      // A security component: tapping it grants a temporary pasteboard read
+      // authorization without READ_PASTEBOARD. It is only shown while Slint
+      // has an editable field focused.
+      if (this.pasteButtonVisible) {
+        PasteButton({ icon: PasteIconStyle.LINES, text: PasteDescription.PASTE })
+          .onClick((event: ClickEvent, result: PasteButtonOnClickResult,
+            error?: BusinessError): void => {
+            this.onPasteButtonClick(result, error);
+          })
+          .offset({ x: -24, y: -24 })
+      }
     }
     .width('100%')
     .height('100%')
+  }
+
+  private onPasteButtonClick(result: PasteButtonOnClickResult,
+    error?: BusinessError): void {
+    if (result !== PasteButtonOnClickResult.SUCCESS) {
+      hilog.error(0x0000, LOG_TAG, 'paste button authorization failed: %{public}d %{public}s',
+        result, error?.message ?? '');
+      return;
+    }
+    const board = this.systemPasteboard ?? pasteboard.getSystemPasteboard();
+    board.getData().then((data: pasteboard.PasteData): void => {
+      let text = '';
+      try {
+        text = data.getPrimaryText() ?? '';
+      } catch (error) {
+        hilog.error(0x0000, LOG_TAG, 'paste button text extraction failed: %{public}s',
+          (error as BusinessError).message);
+      }
+      if (text.length > 0) {
+        this.nativeModule?.imeCommit?.(text);
+      }
+    }).catch((error: BusinessError): void => {
+      hilog.error(0x0000, LOG_TAG, 'paste button read failed: %{public}d %{public}s',
+        error.code, error.message);
+    });
   }
 
   // Diagnostic: resolves the app's own resources once per launch, so a hap
@@ -337,6 +374,7 @@ struct Index {
   // changes the keyboard type, which the controller only reads at attach
   // time, so a type change detaches and attaches again.
   private showIme(password: boolean): void {
+    this.pasteButtonVisible = true;
     try {
       if (this.imeAttachPending) {
         this.pendingImePassword = password;
@@ -463,6 +501,7 @@ struct Index {
   }
 
   private hideIme(): void {
+    this.pasteButtonVisible = false;
     if (!this.imeAttached) {
       return;
     }

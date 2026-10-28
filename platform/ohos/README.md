@@ -69,9 +69,13 @@ environment variables understood by `scripts/env.sh`.
 
 ```sh
 . platform/ohos/scripts/env.sh
-APP=mail PROFILE=release CARGO_BUILD_JOBS=4 sh platform/ohos/scripts/build-hap.sh
+# Keep the large Cargo/staging outputs off the hmdfs user tree.
+export CARGO_TARGET_DIR=/tmp/flectar-build/target
+export OHOS_BUILD_DIR=/tmp/flectar-build/hap
+APP=mail PROFILE=release CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 \
+  sh platform/ohos/scripts/build-hap.sh
 
-hdc file send platform/ohos/build/flectar_mail_ohos-signed.hap /data/local/tmp/flectar.hap
+hdc file send /tmp/flectar-build/hap/flectar_mail_ohos-signed.hap /data/local/tmp/flectar.hap
 hdc shell "bm install -r -d -p /data/local/tmp/flectar.hap"
 hdc shell "aa start -a EntryAbility -b com.flectar.mail"
 ```

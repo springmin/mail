@@ -37,7 +37,7 @@ static NEXT_REQUEST: AtomicI64 = AtomicI64::new(1);
 /// One open picker: where its result goes, and the hold that keeps the Slint
 /// thread from presenting while the picker covers the window.
 struct Pending {
-    sender: oneshot::Sender<Result<String, String>>,
+    sender: oneshot::Sender<Result<(String, String), String>>,
     _hold: PresentationHold,
 }
 
@@ -114,8 +114,8 @@ pub(super) unsafe extern "C" fn submit_bridge_result(
     // SAFETY: live `env`/`info` from the NAPI runtime; `argv` holds the three
     // expected arguments.
     unsafe {
-        let mut argc: usize = 3;
-        let mut argv: [napi_value; 3] = [core::ptr::null_mut(); 3];
+        let mut argc: usize = 4;
+        let mut argv: [napi_value; 4] = [core::ptr::null_mut(); 4];
         let rc = ffi::napi_get_cb_info(
             env,
             info,
@@ -134,8 +134,13 @@ pub(super) unsafe extern "C" fn submit_bridge_result(
         } else {
             String::new()
         };
-        let error = if argc > 2 {
+        let name = if argc > 2 {
             read_string(env, argv[2]).unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let error = if argc > 3 {
+            read_string(env, argv[3]).unwrap_or_default()
         } else {
             String::new()
         };
@@ -144,7 +149,7 @@ pub(super) unsafe extern "C" fn submit_bridge_result(
             Some(Pending { sender, .. }) => {
                 // Empty path + empty error means "the user cancelled".
                 let outcome = if !path.is_empty() || error.is_empty() {
-                    Ok(path)
+                    Ok((path, name))
                 } else {
                     Err(error)
                 };
@@ -180,7 +185,7 @@ pub(super) fn open_url(url: &str) -> Result<(), String> {
 
 /// Registers a picker request. Its entry holds presentation until the page
 /// reports the result or the request is dropped, whichever thread awaits it.
-fn register_picker() -> Result<(i64, oneshot::Receiver<Result<String, String>>), String> {
+fn register_picker() -> Result<(i64, oneshot::Receiver<Result<(String, String), String>>), String> {
     let id = NEXT_REQUEST.fetch_add(1, Ordering::SeqCst);
     let (sender, receiver) = oneshot::channel();
     let request = Pending {
@@ -194,14 +199,20 @@ fn register_picker() -> Result<(i64, oneshot::Receiver<Result<String, String>>),
     Ok((id, receiver))
 }
 
+/// One picked document: the private staged path and its original display name.
+pub(super) struct PickedFile {
+    pub(super) path: String,
+    pub(super) name: String,
+}
+
 /// Run the system file picker for one document. `Ok(None)` = user cancelled.
-pub(super) async fn pick_open() -> Result<Option<String>, String> {
+pub(super) async fn pick_open() -> Result<Option<PickedFile>, String> {
     let (id, receiver) = register_picker()?;
     let guard = PendingGuard(id);
     call_closure(&PICK_OPEN, "pickOpen", id)?;
-    let path = await_result(receiver).await?;
+    let (path, name) = await_result(receiver).await?;
     drop(guard);
-    Ok((!path.is_empty()).then_some(path))
+    Ok((!path.is_empty()).then_some(PickedFile { path, name }))
 }
 
 /// Ask the system file picker for a destination and copy `source_path` there.
@@ -218,7 +229,7 @@ pub(super) async fn pick_save(
         name: suggested_name,
     };
     call_closure(&PICK_SAVE, "pickSave", request)?;
-    let path = await_result(receiver).await?;
+    let (path, _name) = await_result(receiver).await?;
     drop(guard);
     Ok((!path.is_empty()).then_some(path))
 }
@@ -239,8 +250,8 @@ struct SaveRequest {
 }
 
 async fn await_result(
-    receiver: oneshot::Receiver<Result<String, String>>,
-) -> Result<String, String> {
+    receiver: oneshot::Receiver<Result<(String, String), String>>,
+) -> Result<(String, String), String> {
     match tokio::time::timeout(Duration::from_secs(600), receiver).await {
         Ok(Ok(result)) => result,
         Ok(Err(_)) => Err("the file picker was closed".to_owned()),
@@ -276,6 +287,32 @@ pub(super) fn update_cursor(left: f32, top: f32, width: f32, height: f32) {
 /// clipboard fallback on a denied read).
 pub(super) fn request_pasteboard() {
     let _ = call_closure(&REQUEST_PASTEBOARD, "requestPasteboard", ());
+}
+
+/// `setClipboardText(text)`: the ArkTS page read the system pasteboard on the
+/// UI thread. Empty text invalidates the cache.
+pub(super) unsafe extern "C" fn set_clipboard_text(
+    env: napi_env,
+    info: ffi::napi_callback_info,
+) -> napi_value {
+    // SAFETY: live `env`/`info` from the NAPI runtime.
+    unsafe {
+        let mut argc: usize = 1;
+        let mut argv: [napi_value; 1] = [core::ptr::null_mut()];
+        let rc = ffi::napi_get_cb_info(
+            env,
+            info,
+            &mut argc,
+            argv.as_mut_ptr(),
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+        );
+        if rc == ffi::NAPI_OK && argc >= 1 {
+            let text = read_string(env, argv[0]).unwrap_or_default();
+            slint_ohos_backend::clipboard::set_cached_text((!text.is_empty()).then_some(text));
+        }
+        undefined(env)
+    }
 }
 
 /// `imeCommit(text)`: committed text from the soft keyboard.

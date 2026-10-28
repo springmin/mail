@@ -1,5 +1,5 @@
 import { abilityAccessCtrl, common, ConfigurationConstant, PermissionRequestResult, Permissions, Want } from '@kit.AbilityKit';
-import { BusinessError } from '@kit.BasicServicesKit';
+import { BusinessError, pasteboard } from '@kit.BasicServicesKit';
 import { fileIo, picker } from '@kit.CoreFileKit';
 import { inputMethod } from '@kit.IMEKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
@@ -25,15 +25,21 @@ interface FlectarBridge {
   requestPasteboard: () => void;
 }
 
+interface StagedFile {
+  path: string;
+  name: string;
+}
+
 // The exports of the native XComponent module (`onLoad` hands them over).
 interface FlectarNativeModule {
   setBridge?: (bridge: FlectarBridge) => void;
-  submitBridgeResult?: (requestId: number, path: string, error: string) => boolean;
+  submitBridgeResult?: (requestId: number, path: string, name: string, error: string) => boolean;
   imeCommit?: (text: string) => void;
   imeDelete?: (count: number) => void;
   imeFunction?: (key: number) => void;
   setColorScheme?: (dark: boolean) => void;
   suspendPreview?: () => void;
+  setClipboardText?: (text: string) => void;
 }
 
 @Entry
@@ -46,6 +52,8 @@ struct Index {
   private imeAttachPending: boolean = false;
   private imePassword: boolean | undefined = undefined;
   private pendingImePassword: boolean | undefined = undefined;
+  @State private pasteButtonVisible: boolean = false;
+  @State private pasteButtonFallback: boolean = false;
   private windowOffsetX: number = 0;
   private windowOffsetY: number = 0;
   private appBackgroundHandler: () => void = (): void => {
@@ -54,6 +62,10 @@ struct Index {
   private lastImeCursor: string = '';
   private appliedColorMode: number = -2;
   private pasteboardPermissionRequested: boolean = false;
+  private systemPasteboard: pasteboard.SystemPasteboard | undefined = undefined;
+  private clipboardUpdateHandler: () => void = (): void => {
+    this.refreshClipboard();
+  };
   aboutToAppear(): void {
     this.probeResources();
     try {
@@ -73,6 +85,7 @@ struct Index {
   onPageShow(): void {
     this.applySystemColorScheme(this.colorMode);
     this.updateWindowOffset();
+    this.refreshClipboard();
   }
 
   onPageHide(): void {
@@ -99,6 +112,13 @@ struct Index {
       hilog.error(0x0000, LOG_TAG, 'background listener cleanup failed: %{public}s',
         (error as BusinessError).message);
     }
+    try {
+      this.systemPasteboard?.off('update', this.clipboardUpdateHandler);
+    } catch (error) {
+      hilog.error(0x0000, LOG_TAG, 'clipboard listener cleanup failed: %{public}s',
+        (error as BusinessError).message);
+    }
+    this.systemPasteboard = undefined;
     this.imeAttached = false;
     this.imeAttachPending = false;
     this.imePassword = undefined;
@@ -107,7 +127,7 @@ struct Index {
   }
 
   build(): void {
-    Column() {
+    Stack({ alignContent: Alignment.BottomEnd }) {
       XComponent({
         id: 'flectar_mail_surface',
         type: XComponentType.SURFACE,
@@ -122,9 +142,45 @@ struct Index {
             this.installBridge(context);
           }
         })
+      // A security component: tapping it grants a temporary pasteboard read
+      // authorization without READ_PASTEBOARD. It is only shown while Slint
+      // has an editable field focused.
+      if (this.pasteButtonVisible && this.pasteButtonFallback) {
+        PasteButton({ icon: PasteIconStyle.LINES, text: PasteDescription.PASTE })
+          .onClick((event: ClickEvent, result: PasteButtonOnClickResult,
+            error?: BusinessError): void => {
+            this.onPasteButtonClick(result, error);
+          })
+          .offset({ x: -24, y: -24 })
+      }
     }
     .width('100%')
     .height('100%')
+  }
+
+  private onPasteButtonClick(result: PasteButtonOnClickResult,
+    error?: BusinessError): void {
+    if (result !== PasteButtonOnClickResult.SUCCESS) {
+      hilog.error(0x0000, LOG_TAG, 'paste button authorization failed: %{public}d %{public}s',
+        result, error?.message ?? '');
+      return;
+    }
+    const board = this.systemPasteboard ?? pasteboard.getSystemPasteboard();
+    board.getData().then((data: pasteboard.PasteData): void => {
+      let text = '';
+      try {
+        text = data.getPrimaryText() ?? '';
+      } catch (error) {
+        hilog.error(0x0000, LOG_TAG, 'paste button text extraction failed: %{public}s',
+          (error as BusinessError).message);
+      }
+      if (text.length > 0) {
+        this.nativeModule?.imeCommit?.(text);
+      }
+    }).catch((error: BusinessError): void => {
+      hilog.error(0x0000, LOG_TAG, 'paste button read failed: %{public}d %{public}s',
+        error.code, error.message);
+    });
   }
 
   // Diagnostic: resolves the app's own resources once per launch, so a hap
@@ -182,10 +238,50 @@ struct Index {
     });
     this.applySystemColorScheme(this.colorMode);
     this.updateWindowOffset();
+    this.installClipboardListener();
   }
 
-  private reportBridgeResult(requestId: number, path: string, error: string): boolean {
-    return this.nativeModule?.submitBridgeResult?.(requestId, path, error) ?? false;
+  private reportBridgeResult(
+    requestId: number, path: string, error: string, name: string = ''): boolean {
+    return this.nativeModule?.submitBridgeResult?.(requestId, path, name, error) ?? false;
+  }
+
+  // The Slint thread must never read the pasteboard: a cross-device clipboard
+  // can stall it. Keep a UI-thread cache fresh and push it to native code.
+  private installClipboardListener(): void {
+    try {
+      this.systemPasteboard = pasteboard.getSystemPasteboard();
+      this.systemPasteboard.on('update', this.clipboardUpdateHandler);
+    } catch (error) {
+      hilog.error(0x0000, LOG_TAG, 'clipboard listener failed: %{public}s',
+        (error as BusinessError).message);
+    }
+    this.refreshClipboard();
+  }
+
+  private refreshClipboard(): void {
+    const board = this.systemPasteboard ?? pasteboard.getSystemPasteboard();
+    board.getData().then((data: pasteboard.PasteData): void => {
+      let text = '';
+      try {
+        text = data.getPrimaryText() ?? '';
+      } catch (error) {
+        hilog.error(0x0000, LOG_TAG, 'clipboard text extraction failed: %{public}s',
+          (error as BusinessError).message);
+      }
+      this.nativeModule?.setClipboardText?.(text);
+      // Ctrl+V works through the native cache when READ_PASTEBOARD is
+      // available; the security component is only a fallback.
+      this.pasteButtonFallback = false;
+    }).catch((error: BusinessError): void => {
+      this.pasteButtonFallback = true;
+      if (error.code === 201) {
+        this.requestPasteboardPermission();
+      } else {
+        hilog.error(0x0000, LOG_TAG, 'clipboard read failed: %{public}d %{public}s',
+          error.code, error.message);
+      }
+    });
   }
 
   private openUrl(url: string): void {
@@ -227,10 +323,10 @@ struct Index {
       }
       const staged = await this.stageCopy(context, uris[0]);
       hilog.info(0x0000, LOG_TAG, 'picker imported a document (%{public}d picked)', uris.length);
-      if (!this.reportBridgeResult(requestId, staged, '')) {
+      if (!this.reportBridgeResult(requestId, staged.path, '', staged.name)) {
         // The native request timed out or was cancelled while the picker was
         // open; do not leave the staged copy behind.
-        fileIo.unlink(staged).catch((error: BusinessError): void => {
+        fileIo.unlink(staged.path).catch((error: BusinessError): void => {
           hilog.error(0x0000, LOG_TAG, 'could not remove the orphaned import: %{public}s',
             error.message);
         });
@@ -283,6 +379,7 @@ struct Index {
   // changes the keyboard type, which the controller only reads at attach
   // time, so a type change detaches and attaches again.
   private showIme(password: boolean): void {
+    this.pasteButtonVisible = true;
     try {
       if (this.imeAttachPending) {
         this.pendingImePassword = password;
@@ -409,6 +506,7 @@ struct Index {
   }
 
   private hideIme(): void {
+    this.pasteButtonVisible = false;
     if (!this.imeAttached) {
       return;
     }
@@ -473,7 +571,9 @@ struct Index {
         .then((result: PermissionRequestResult): void => {
           const granted = result.authResults.length > 0 && result.authResults[0] === 0;
           hilog.info(0x0000, LOG_TAG, `pasteboard permission granted: ${granted}`);
-          if (!granted) {
+          if (granted) {
+            this.refreshClipboard();
+          } else {
             this.showPasteboardNotice();
           }
         })
@@ -505,7 +605,7 @@ struct Index {
    * @throws { BusinessError } when the picked file cannot be opened or copied;
    * the caller reports it through the bridge result.
    */
-  private async stageCopy(context: common.UIAbilityContext, uri: string): Promise<string> {
+  private async stageCopy(context: common.UIAbilityContext, uri: string): Promise<StagedFile> {
     const directory = `${context.cacheDir}/imports`;
     try {
       await fileIo.mkdir(directory, true);
@@ -525,7 +625,18 @@ struct Index {
       // Never reuse the picked file name (or a predictable timestamp) in the
       // cache: it can leak the user's document name and collide with another
       // staged import. Keep only a short extension for content detection.
-      const raw = uri.split('/').pop() ?? '';
+      // The display name is a separate field; decode the URI basename so a
+      // Chinese or spaced filename is not shown as `%E8%AE%BE...`.
+      let raw = uri.split('/').pop() ?? '';
+      const query = raw.search(/[?#]/);
+      if (query >= 0) {
+        raw = raw.substring(0, query);
+      }
+      try {
+        raw = decodeURIComponent(raw);
+      } catch (error) {
+        // Keep the encoded name rather than failing the attachment import.
+      }
       const dot = raw.lastIndexOf('.');
       const extension = dot > 0
         ? raw.substring(dot).replace(/[^A-Za-z0-9.]/g, '').substring(0, 12)
@@ -540,7 +651,7 @@ struct Index {
       } finally {
         await fileIo.close(target);
       }
-      return destination;
+      return { path: destination, name: raw };
     } finally {
       await fileIo.close(source);
     }

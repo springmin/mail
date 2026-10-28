@@ -80,6 +80,16 @@ hdc shell "bm install -r -d -p /data/local/tmp/flectar.hap"
 hdc shell "aa start -a EntryAbility -b com.flectar.mail"
 ```
 
+For a fully isolated disposable build (worktree, Cargo target, hvigor output
+and hap staging all under `/tmp`), use:
+
+```sh
+CARGO_BUILD_JOBS=1 platform/ohos/scripts/build-hap-isolated.sh
+```
+
+This keeps the large build write path off the user hmdfs tree, which is
+indexed and security-scanned; use it on the device when building directly.
+
 The bundle name defaults to `com.flectar.mail`. The hap version follows the
 workspace `Cargo.toml`: `versionName` is the crate version and `versionCode`
 follows the Android sequence from `scripts/android-version-code.py` (alpha <

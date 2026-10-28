@@ -1,69 +1,59 @@
 #!/bin/sh
-# Build a HAP from a temporary worktree whose Cargo target, hvigor output and
-# HAP staging all live under /tmp (hmfs userdata), not the user hmdfs tree.
+# Build a HAP while keeping the large write path off the user hmdfs tree.
 #
-# The user hmdfs tree is indexed and security-scanned; large Rust targets there
-# caused severe I/O pressure and system reboots on this device. This wrapper
-# keeps the build write path off hmdfs. The source worktree is disposable.
+# Cargo's advisory file lock is unsupported on the /tmp hmfs mount. The source,
+# Cargo.lock and Cargo target therefore stay on hmdfs, but the target uses the
+# hidden ~/.cache/flectar-target path so the user-file indexer does not scan
+# it. The shell project copy, hvigor output and HAP staging live under /tmp.
 set -e
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 PLATFORM_DIR=$(dirname "$HERE")
 REPO_ROOT=$(cd "$PLATFORM_DIR/../.." && pwd)
 ROOT="${OHOS_ISOLATED_ROOT:-/tmp/flectar-build}"
-WORKTREE="$ROOT/mail"
-TARGET_DIR="$ROOT/target"
+TARGET_DIR="${OHOS_TARGET_DIR:-$HOME/.cache/flectar-target}"
 HAP_DIR="$ROOT/hap"
-REVISION="${OHOS_ISOLATED_REVISION:-$(git -C "$REPO_ROOT" rev-parse HEAD)}"
+SHELL_DIR="$ROOT/shell"
 
 log() { printf '[isolated-build] %s\n' "$*"; }
 die() { printf '[isolated-build] ERROR: %s\n' "$*" >&2; exit 1; }
 
-mkdir -p "$ROOT"
+mkdir -p "$ROOT" "$TARGET_DIR"
 [ -w "$ROOT" ] || die "$ROOT is not writable"
-# /tmp is backed by hmfs userdata on this device, not by the user hmdfs tree.
-case "$ROOT" in
-    /tmp/*) ;;
-    *) log "warning: $ROOT is not under /tmp; verify it is not an indexed hmdfs path" ;;
-esac
-
-if [ -e "$WORKTREE/.git" ]; then
-    log "recreating disposable worktree $WORKTREE"
-    git -C "$REPO_ROOT" worktree remove --force "$WORKTREE"
-elif [ -e "$WORKTREE" ]; then
-    die "$WORKTREE exists but is not a git worktree; remove it manually"
-fi
-log "worktree $WORKTREE at $REVISION"
-git -C "$REPO_ROOT" worktree add --detach "$WORKTREE" "$REVISION"
-
-# Ignored build inputs are not part of the worktree. Copy only the staged
-# native libraries and local hvigor modules; do not copy target/build output.
-if [ -d "$REPO_ROOT/platform/ohos/prebuilt" ]; then
-    rm -rf "$WORKTREE/platform/ohos/prebuilt"
-    cp -a "$REPO_ROOT/platform/ohos/prebuilt" "$WORKTREE/platform/ohos/prebuilt"
-fi
-if [ -d "$REPO_ROOT/platform/ohos/shell/oh_modules" ]; then
-    rm -rf "$WORKTREE/platform/ohos/shell/oh_modules"
-    cp -a "$REPO_ROOT/platform/ohos/shell/oh_modules" "$WORKTREE/platform/ohos/shell/oh_modules"
+# The source, Cargo.lock and target stay on hmdfs for Cargo's file lock; the
+# shell/staging outputs use hmfs under /tmp.
+if [ -e "$ROOT/mail" ]; then
+    if git -C "$REPO_ROOT" worktree list 2>/dev/null | grep -q "$ROOT/mail"; then
+        git -C "$REPO_ROOT" worktree remove --force "$ROOT/mail"
+    else
+        rm -rf "$ROOT/mail"
+    fi
 fi
 
-mkdir -p "$TARGET_DIR" "$HAP_DIR"
+rm -rf "$SHELL_DIR"
+mkdir -p "$SHELL_DIR"
+cp -a "$PLATFORM_DIR/shell/." "$SHELL_DIR/"
+mkdir -p "$HAP_DIR"
+
+log "source:       $REPO_ROOT"
+log "shell copy:   $SHELL_DIR"
 log "cargo target: $TARGET_DIR"
 log "hap output:   $HAP_DIR"
 log "building with CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-1}, incremental off"
 
-cd "$WORKTREE/platform/ohos"
+cd "$PLATFORM_DIR"
 CARGO_TARGET_DIR="$TARGET_DIR" \
 OHOS_BUILD_DIR="$HAP_DIR" \
+OHOS_SHELL_DIR="$SHELL_DIR" \
 CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}" \
 CARGO_INCREMENTAL=0 \
 CARGO_NET_OFFLINE="${CARGO_NET_OFFLINE:-true}" \
 APP="${APP:-mail}" \
 PROFILE="${PROFILE:-release}" \
+SKIP_CARGO="${SKIP_CARGO:-0}" \
 SKIP_SIGN="${SKIP_SIGN:-1}" \
 sh scripts/build-hap.sh
 
 HAP="$HAP_DIR/flectar_mail_ohos-unsigned.hap"
 [ -f "$HAP" ] || die "unsigned hap not found at $HAP"
 log "unsigned hap: $HAP"
-log "worktree and target remain under $ROOT; this tree is disposable"

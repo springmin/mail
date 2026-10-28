@@ -28,7 +28,7 @@ log() { printf '[build-hap] %s\n' "$*"; }
 die() { printf '[build-hap] ERROR: %s\n' "$*" >&2; exit 1; }
 
 SDK="$OHOS_SDK_ROOT"
-SHELL_DIR="$PLATFORM_DIR/shell"
+SHELL_DIR="${OHOS_SHELL_DIR:-$PLATFORM_DIR/shell}"
 # Keep the large staging output off hmdfs when requested. /tmp is a writable
 # hmfs volume on the device and is not scanned by the user-file indexer.
 BUILD_DIR="${OHOS_BUILD_DIR:-$PLATFORM_DIR/build}"
@@ -108,8 +108,12 @@ else
     CARGO_PROFILE_ARG="--release"
     SO_DIR="release"
 fi
-log "cargo build $PROFILE -p $CRATE"
-( cd "$PLATFORM_DIR" && CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-3}" cargo build $CARGO_PROFILE_ARG -p "$CRATE" )
+if [ "${SKIP_CARGO:-0}" = "1" ]; then
+    log "cargo build skipped (SKIP_CARGO=1); reusing the cached cdylib"
+else
+    log "cargo build $PROFILE -p $CRATE"
+    ( cd "$PLATFORM_DIR" && CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-3}" cargo build $CARGO_PROFILE_ARG -p "$CRATE" )
+fi
 TARGET_DIR="${CARGO_TARGET_DIR:-$REPO_DIR/target}"
 SO="$TARGET_DIR/$SO_DIR/lib$LIB.so"
 [ -f "$SO" ] || die "cdylib not found: $SO"

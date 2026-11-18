@@ -156,19 +156,24 @@ Privacy work is deliberately split:
 - The consent screen must gate the XComponent and the native mail runtime.
   Nothing may process mail before acceptance.
 - Request notification permission only after consent, not from
-  `aboutToAppear` or the ability's page-load callback.
+  `aboutToAppear` or the ability's page-load callback. Ask when the first
+  account is added, and remember on the page that the prompt was shown so a
+  refusal is not repeated.
 - Consent copy comes from HarmonyOS string resources, not ArkTS literals:
   English, Simplified Chinese, Spanish, Turkish and Russian, with English as
-  the base fallback. All Chinese locales (including Traditional) use the
-  Simplified Chinese page/copy; other unsupported languages fall back to
-  English.
+  the base fallback. Simplified Chinese is the only Chinese resource set;
+  Traditional Chinese falls back to English, and its policy link opens the
+  English policy.
 - Settings -> About must allow withdrawal. Clear the stored preference and
   exit; leave local mail and settings for the separate delete action.
-- Follow the effective `AppTheme`, including presets, custom palettes and
-  light/dark. Persist an `AppTheme` snapshot over the ArkTS bridge and use it
-  for page background, surface, text, border, accent and primary colors.
+- Follow the system light/dark mode with the default palette. Do not add an
+  `AppTheme` snapshot, shared theme callbacks or theme statics for the gate; a
+  first launch has no saved theme anyway.
 - Draw consent icons with theme-colored strokes (ArkUI `Shape`/`Path`), not
   fixed-color SVGs.
+- Keep the language sync separate: an `AppLanguage` host service on
+  `PlatformContext` with the replay in `bridge.rs`, and the policy link using
+  `i18n.System.getAppPreferredLanguage`.
 - Keep shared withdrawal copy in Slint and Weblate; do not add it to the OHOS
   string resources.
 

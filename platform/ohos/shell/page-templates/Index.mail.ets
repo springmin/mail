@@ -685,9 +685,14 @@ struct Index {
   // Sync lists devices by a name people know. Prefer the marketing name
   // ("HUAWEI MateBook Pro") and fall back to the product model ("HAD-W32").
   private reportDeviceName(nativeModule: FlectarNativeModule): void {
-    const marketName = deviceInfo.marketName.trim();
-    const productModel = deviceInfo.productModel.trim();
-    nativeModule.setDeviceName?.(marketName.length > 0 ? marketName : productModel);
+    try {
+      const marketName = deviceInfo.marketName.trim();
+      const productModel = deviceInfo.productModel.trim();
+      nativeModule.setDeviceName?.(marketName.length > 0 ? marketName : productModel);
+    } catch (error) {
+      hilog.error(0x0000, LOG_TAG, 'could not read the device name: %{public}s',
+        (error as BusinessError).message);
+    }
   }
 
   private reportBridgeResult(

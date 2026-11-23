@@ -655,11 +655,9 @@ pub(super) unsafe extern "C" fn set_device_name(
             && argc >= 1
             && let Some(name) = read_string(env, argv[0])
         {
-            let name = name.trim().to_owned();
+            let name = name.trim();
             if name.is_empty() {
                 slint_ohos_backend::ohos_info!("mail: no device name from deviceInfo");
-            } else {
-                slint_ohos_backend::ohos_info!("mail: device name: {name}");
             }
             flectar_mail::platform::set_device_name(name);
         }

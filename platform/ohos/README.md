@@ -67,7 +67,8 @@ environment variables understood by `scripts/env.sh`.
     `$HOME/Documents/ohos/config`, bound to the device UDID), whose store
     passphrase is fetched at build time by the local `sign-huawei.sh` helper.
 
-  Neither password is stored in this repository.
+  Neither password is stored in this repository. Debug signing is local-only:
+  CI builds with `SKIP_SIGN=1` and never receives this material.
 - `node` with hvigor installed (`$HOME/arkts-build/node_modules/@ohos/hvigor`),
   and OpenJDK 17 (`$HOME/.harmonybrew/opt/openjdk@17`).
 - The Rust `aarch64-unknown-linux-ohos` target (built natively on the device).
@@ -95,10 +96,13 @@ Release builds are signed with the AGC material through `hap-sign-tool`:
 ```sh
 RELEASE_SIGN=1 \
 RELEASE_P12=release.p12 RELEASE_CERT=com.flectar.mail.cer \
-RELEASE_PROFILE=FlectarMailProfileRelease.p7b \
+RELEASE_PROFILE=ACLReleaseProfileRelease.p7b \
 RELEASE_KEY_ALIAS=releasekey RELEASE_KEY_PWD=... RELEASE_STORE_PWD=... \
 APP=mail PROFILE=release sh platform/ohos/scripts/build-hap.sh
 ```
+
+The ACL-enabled profile is required because the app declares
+`ohos.permission.READ_PASTEBOARD`.
 
 Without `RELEASE_SIGN=1` the script signs a debug hap. `APP=mail` uses the
 AGC debug material above when it is present. `DEBUG_PROFILE`, `DEBUG_CERT`,
@@ -110,6 +114,10 @@ The selected profile must name the bundle being built. A profile for another
 bundle stops the build before signing (for example, a DevEco config generated
 for `com.example.myapplication`), instead of producing a hap the device
 rejects with `verify signature failed`.
+
+Debug signing is for local device testing only: CI builds with `SKIP_SIGN=1`
+and never receives the keystore or its password. The password comes from
+`DEBUG_KEY_PWD`/`DEBUG_STORE_PWD` or `DEBUG_PWD_FILE`.
 
 `bm install -r -d` is deliberate: `hdc install` rejects the hap ("install
 version downgrade") because the shared bundle name carries the DevEco
@@ -189,9 +197,13 @@ handled (and asserted) in the script, do not "simplify" them away:
 - **Network proxy**: the page reads HarmonyOS's system HTTP proxy through
   Network Kit (`OH_NetConn_GetDefaultHttpProxy`). It applies to HTTP(S)
   traffic (OAuth, AI, Sync and updates); a changed system proxy is seen when
-  the shared cache's minute expires, and Network Kit's app-proxy callback
-  drops that cache too. Mail stays direct unless it has its own SOCKS proxy,
-  and PAC or authenticated system proxies need the manual proxy fields.
+  the shared cache's minute expires. Mail stays direct unless it has its own
+  SOCKS proxy, and PAC or authenticated system proxies need the manual proxy
+  fields.
+- **Sync device name**: the page reports `deviceInfo.marketName` (or, without
+  one, `productModel`) as soon as the native bridge is installed, so Flectar
+  Mail Sync lists this device by a name people know instead of "Unnamed
+  device". If the page is late, the host waits up to 500 ms for the name.
 - **Clipboard**: copying needs no permission, but pasting reads the system
   pasteboard and therefore requires `ohos.permission.READ_PASTEBOARD`, an ACL
   (restricted) permission. The module declares it and the page requests it on

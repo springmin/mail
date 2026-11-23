@@ -11,6 +11,7 @@
 //! with the manual proxy fields in Settings.
 
 use core::ffi::{CStr, c_char};
+use std::net::IpAddr;
 
 use flectar_mail::platform::{SystemProxies, configure_system_proxy};
 use url::Url;
@@ -27,34 +28,22 @@ struct NetConnHttpProxy {
     port: u16,
 }
 
-type AppHttpProxyChange = unsafe extern "C" fn(*mut NetConnHttpProxy);
+// The C layout from `net_connection_type.h`: host, the exclusion array, its
+// size, and the port, padded to the alignment of `i32`.
+const _: () = assert!(core::mem::size_of::<NetConnHttpProxy>() == 65_800);
+const _: () = assert!(core::mem::align_of::<NetConnHttpProxy>() == 4);
 
 #[link(name = "net_connection")]
 unsafe extern "C" {
     /// `OH_NetConn_GetDefaultHttpProxy`: 0 on success.
     fn OH_NetConn_GetDefaultHttpProxy(proxy: *mut NetConnHttpProxy) -> i32;
-    /// `OH_NetConn_RegisterAppHttpProxyCallback`: 0 on success.
-    fn OH_NetConn_RegisterAppHttpProxyCallback(
-        callback: AppHttpProxyChange,
-        callback_id: *mut u32,
-    ) -> i32;
 }
 
-/// Install the system-proxy reader and Network Kit's app-proxy change
-/// callback. Call before `flectar_mail::run`, which starts the first
-/// connections. A changed system proxy is seen when the shared cache's
-/// minute expires; the callback covers the app proxy.
+/// Install the system-proxy reader. Call before `flectar_mail::run`, which
+/// starts the first connections. A changed system proxy is seen when the
+/// shared cache's minute expires.
 pub(super) fn install() {
     configure_system_proxy(Reader);
-    let mut callback_id: u32 = 0;
-    // SAFETY: the callback matches the C signature and stays valid for the
-    // life of the process; `callback_id` points at writable storage.
-    let rc = unsafe { OH_NetConn_RegisterAppHttpProxyCallback(proxy_changed, &mut callback_id) };
-    if rc == 0 {
-        slint_ohos_backend::ohos_info!("mail: app proxy callback registered");
-    } else {
-        slint_ohos_backend::ohos_error!("mail: app proxy callback registration failed: {rc}");
-    }
     match system_http_proxy() {
         Ok(Some((host, port, exclusions))) => slint_ohos_backend::ohos_info!(
             "mail: system HTTP proxy {host}:{port} ({} exclusions)",
@@ -64,28 +53,6 @@ pub(super) fn install() {
         Err(rc) => {
             slint_ohos_backend::ohos_error!("mail: system HTTP proxy read failed: {rc}")
         }
-    }
-}
-
-/// Network Kit reports an app-proxy change; the shared layer drops cached
-/// answers and clients.
-unsafe extern "C" fn proxy_changed(proxy: *mut NetConnHttpProxy) {
-    flectar_mail::flectar_mail_core::net::proxy::system_changed();
-    // SAFETY: the callback argument stays valid for the call.
-    let (host, port) = match unsafe { proxy.as_ref() } {
-        Some(proxy) => (
-            // SAFETY: the API writes NUL-terminated strings into the array.
-            unsafe { CStr::from_ptr(proxy.host.as_ptr()) }
-                .to_string_lossy()
-                .into_owned(),
-            proxy.port,
-        ),
-        None => (String::new(), 0),
-    };
-    if host.is_empty() || port == 0 {
-        slint_ohos_backend::ohos_info!("mail: app HTTP proxy changed: none");
-    } else {
-        slint_ohos_backend::ohos_info!("mail: app HTTP proxy changed: {host}:{port}");
     }
 }
 
@@ -129,10 +96,9 @@ fn system_http_proxy() -> Result<Option<(String, u16, Vec<String>)>, i32> {
     if rc != 0 {
         return Err(rc);
     }
-    // SAFETY: the API writes NUL-terminated strings into the fixed arrays.
-    let host = unsafe { CStr::from_ptr(proxy.host.as_ptr()) }
-        .to_string_lossy()
-        .into_owned();
+    let Some(host) = c_string(&proxy.host) else {
+        return Ok(None);
+    };
     if host.is_empty() || proxy.port == 0 {
         return Ok(None);
     }
@@ -140,8 +106,10 @@ fn system_http_proxy() -> Result<Option<(String, u16, Vec<String>)>, i32> {
     let mut exclusions = Vec::with_capacity(count);
     for index in 0..count {
         // SAFETY: `index` is within the fixed exclusion array.
-        let text = unsafe { CStr::from_ptr(proxy.exclusion_list[index].as_ptr()) };
-        for entry in text.to_string_lossy().split(',') {
+        let Some(text) = c_string(&proxy.exclusion_list[index]) else {
+            continue;
+        };
+        for entry in text.split(',') {
             let entry = entry.trim();
             if !entry.is_empty() {
                 exclusions.push(entry.to_owned());
@@ -151,14 +119,29 @@ fn system_http_proxy() -> Result<Option<(String, u16, Vec<String>)>, i32> {
     Ok(Some((host, proxy.port, exclusions)))
 }
 
+/// A fixed C string, read only within its array. `None` when the system filled
+/// the whole array without a terminating NUL.
+fn c_string(value: &[c_char; MAX_STR]) -> Option<String> {
+    // SAFETY: the array is live and exactly `MAX_STR` bytes long.
+    let bytes = unsafe { std::slice::from_raw_parts(value.as_ptr().cast::<u8>(), MAX_STR) };
+    CStr::from_bytes_until_nul(bytes)
+        .ok()
+        .map(|text| text.to_string_lossy().into_owned())
+}
+
 /// Whether the system's exclusion list covers `host`.
 ///
 /// The rules are Network Kit's: an entry matches the host itself or any
-/// subdomain of it, names compare without case, protocol prefixes are
-/// ignored, and a lone `*` disables the proxy for every host. A `*` mixed
-/// with other entries does not take effect, as in the system's own matching.
+/// subdomain of it, names compare without case, protocol prefixes and ports
+/// are ignored, IP entries match the whole address, and a lone `*` disables
+/// the proxy for every host. A `*` mixed with other entries does not take
+/// effect, as in the system's own matching.
 fn excluded(host: &str, exclusions: &[String]) -> bool {
     let host = normalize_host(host);
+    if host.is_empty() {
+        return false;
+    }
+    let host_ip = host.parse::<IpAddr>().ok();
     let mut has_entry = false;
     let mut all_wildcard = true;
     let mut matched = false;
@@ -172,6 +155,19 @@ fn excluded(host: &str, exclusions: &[String]) -> bool {
             continue;
         }
         all_wildcard = false;
+        let entry_ip = entry.parse::<IpAddr>().ok();
+        if let Some(host_ip) = host_ip {
+            // An IP host matches only an equal address; a domain entry never
+            // covers it, and a partial address never matches.
+            if entry_ip == Some(host_ip) {
+                matched = true;
+            }
+            continue;
+        }
+        if entry_ip.is_some() {
+            // An IP entry names one address, not a domain suffix.
+            continue;
+        }
         if host == entry || host.ends_with(&format!(".{entry}")) {
             matched = true;
         }
@@ -179,17 +175,27 @@ fn excluded(host: &str, exclusions: &[String]) -> bool {
     matched || (has_entry && all_wildcard)
 }
 
-/// A host or exclusion entry without case, a protocol prefix, a trailing dot,
-/// or surrounding space.
+/// A host or exclusion entry without case, a protocol prefix, a path, a port,
+/// a bracketed IPv6 wrapper, a trailing dot, or surrounding space.
 fn normalize_host(value: &str) -> String {
     let value = value.trim();
     let value = value.split_once("://").map_or(value, |(_, rest)| rest);
-    let value = value.split('/').next().unwrap_or(value);
-    value
-        .trim_end_matches('.')
-        .trim_start_matches('[')
-        .trim_end_matches(']')
-        .to_ascii_lowercase()
+    let value = value.split(['/', '?', '#']).next().unwrap_or(value);
+    let value = if let Some(rest) = value.strip_prefix('[') {
+        rest.find(']').map_or(rest, |end| &rest[..end])
+    } else {
+        match value.rsplit_once(':') {
+            Some((host, port))
+                if !host.contains(':')
+                    && !port.is_empty()
+                    && port.chars().all(|c| c.is_ascii_digit()) =>
+            {
+                host
+            }
+            _ => value,
+        }
+    };
+    value.trim_end_matches('.').to_ascii_lowercase()
 }
 
 #[cfg(test)]
@@ -222,19 +228,28 @@ mod tests {
     }
 
     #[test]
-    fn matches_ips_exactly() {
-        let list = entries(&["10.0.0.1", "::1"]);
+    fn matches_ips_by_address_and_not_by_prefix() {
+        let list = entries(&["10.0.0.1", "2001:0db8:0:0:0:0:0:1"]);
         assert!(excluded("10.0.0.1", &list));
         assert!(!excluded("10.0.0.2", &list));
         assert!(!excluded("10.0.0.10", &list));
-        assert!(excluded("[::1]", &list));
+        assert!(excluded("2001:db8::1", &list));
+        let list = entries(&["192.168.1"]);
+        assert!(!excluded("192.168.1.2", &list));
+        let list = entries(&["192.168.1.2"]);
+        assert!(!excluded("host.192.168.1.2", &list));
     }
 
     #[test]
-    fn ignores_protocol_prefixes_paths_and_trailing_dots() {
-        let list = entries(&["https://example.com.", "http://corp.test/path"]);
-        assert!(excluded("example.com", &list));
+    fn ignores_protocols_ports_paths_and_trailing_dots() {
+        let list = entries(&[
+            "https://[::1]:8080/x",
+            "http://corp.test:443/path",
+            "example.com.",
+        ]);
+        assert!(excluded("::1", &list));
         assert!(excluded("host.corp.test", &list));
+        assert!(excluded("example.com", &list));
         assert!(!excluded("other.test", &list));
     }
 }

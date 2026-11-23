@@ -389,7 +389,8 @@ log "unsigned: $UNSIGNED ($(stat -c%s "$UNSIGNED") bytes)"
 #   RELEASE_KEY_ALIAS RELEASE_KEY_PWD RELEASE_STORE_PWD
 # Without either, debug material signs the hap: explicit DEBUG_* files (the
 # mail default lives under DEBUG_SIGN_DIR) or the DevEco auto-signing config
-# through sign-huawei.sh. The debug profile must name $BUNDLE.
+# through sign-huawei.sh. The debug profile must name $BUNDLE. Debug signing
+# is local-only; CI uses SKIP_SIGN=1, so the password never reaches CI.
 if [ "${SKIP_SIGN:-0}" = "1" ]; then
     log "SKIP_SIGN=1: keeping the unsigned hap"
     SIGNED="$UNSIGNED"

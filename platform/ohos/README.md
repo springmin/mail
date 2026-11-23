@@ -58,10 +58,16 @@ environment variables understood by `scripts/env.sh`.
 
 - HarmonyOS SDK root (`OHOS_SDK_ROOT`, default `~/.harmonybrew/opt/ohos-sdk`)
   plus its native subdirectory (`OHOS_SDK_NATIVE`).
-- `hdc` and a DevEco-created signing material directory
-  (`$HOME/Documents/ohos/config`, bound to the device UDID). The store
-  passphrase is fetched at build time by the local `sign-huawei.sh` helper and
-  is never stored in this repository.
+- `hdc` and debug signing material:
+  - the AGC debug profile, certificate and keystore for `com.flectar.mail`
+    (`ACLDebugProfileDebug.p7b`, `com.flectar.mail.debug.cer`, `release.p12`
+    and `release.p12.pwd`) under `$DEBUG_SIGN_DIR`, by default
+    `$HOME/Documents/ohos/release`; or
+  - a DevEco-created signing material directory (`$SIGN_CFG`, by default
+    `$HOME/Documents/ohos/config`, bound to the device UDID), whose store
+    passphrase is fetched at build time by the local `sign-huawei.sh` helper.
+
+  Neither password is stored in this repository.
 - `node` with hvigor installed (`$HOME/arkts-build/node_modules/@ohos/hvigor`),
   and OpenJDK 17 (`$HOME/.harmonybrew/opt/openjdk@17`).
 - The Rust `aarch64-unknown-linux-ohos` target (built natively on the device).
@@ -94,9 +100,16 @@ RELEASE_KEY_ALIAS=releasekey RELEASE_KEY_PWD=... RELEASE_STORE_PWD=... \
 APP=mail PROFILE=release sh platform/ohos/scripts/build-hap.sh
 ```
 
-Without `RELEASE_SIGN=1` the script uses the DevEco auto-signing material,
-which is bound to the bundle it was issued for: if that material was generated
-for a different name, pass `BUNDLE=<that name>` for local debug builds.
+Without `RELEASE_SIGN=1` the script signs a debug hap. `APP=mail` uses the
+AGC debug material above when it is present. `DEBUG_PROFILE`, `DEBUG_CERT`,
+`DEBUG_P12`, `DEBUG_KEY_ALIAS`, and `DEBUG_KEY_PWD`/`DEBUG_STORE_PWD` (or
+`DEBUG_PWD_FILE`) select other material explicitly. Otherwise the DevEco
+auto-signing config goes through `sign-huawei.sh`.
+
+The selected profile must name the bundle being built. A profile for another
+bundle stops the build before signing (for example, a DevEco config generated
+for `com.example.myapplication`), instead of producing a hap the device
+rejects with `verify signature failed`.
 
 `bm install -r -d` is deliberate: `hdc install` rejects the hap ("install
 version downgrade") because the shared bundle name carries the DevEco

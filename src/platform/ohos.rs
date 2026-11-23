@@ -6,7 +6,7 @@ use flectar_mail_core::models::AppIcon;
 use std::{
     path::PathBuf,
     sync::{
-        OnceLock,
+        Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -126,12 +126,49 @@ pub(crate) fn sells_sync() -> bool {
     false
 }
 
-/// How this device appears in Flectar Mail Sync's device list.
-pub(crate) fn device_description() -> flectar_mail_core::device_sync::DeviceDescription {
-    flectar_mail_core::device_sync::DeviceDescription {
-        platform: "harmonyos".to_owned(),
-        ..Default::default()
+/// The marketing name the page read from `deviceInfo`; empty until it reports.
+static DEVICE_NAME: OnceLock<Mutex<String>> = OnceLock::new();
+
+fn device_name_slot() -> &'static Mutex<String> {
+    DEVICE_NAME.get_or_init(|| Mutex::new(String::new()))
+}
+
+/// The page reports the marketing name or, without one, the product model,
+/// before the window reaches Sync. An empty report keeps the previous name.
+pub fn set_device_name(name: String) {
+    let name = name.trim();
+    if name.is_empty() {
+        return;
     }
+    *device_name_slot()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = name.to_owned();
+}
+
+/// How this device appears in Flectar Mail Sync's device list: by its
+/// marketing name, such as "HUAWEI MateBook Pro", as Android and iOS use
+/// their model names. The page reports it through [`set_device_name`].
+pub(crate) fn device_description() -> flectar_mail_core::device_sync::DeviceDescription {
+    let reported = device_name_slot()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    let name = if reported.is_empty() {
+        // The page has not reported yet; keep the host-name fallback.
+        flectar_mail_core::device_sync::DeviceDescription::default().name
+    } else {
+        reported
+    };
+    let description = flectar_mail_core::device_sync::DeviceDescription {
+        name,
+        platform: "harmonyos".to_owned(),
+    };
+    tracing::info!(
+        name = %description.name,
+        platform = %description.platform,
+        "device description for sync"
+    );
+    description
 }
 
 /// The animation reduction setting, as the page last reported it.

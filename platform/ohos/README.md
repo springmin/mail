@@ -58,11 +58,10 @@ environment variables understood by `scripts/env.sh`.
 
 - HarmonyOS SDK root (`OHOS_SDK_ROOT`, default `~/.harmonybrew/opt/ohos-sdk`)
   plus its native subdirectory (`OHOS_SDK_NATIVE`).
-- `hdc` and debug signing material:
-  - the AGC debug profile, certificate and keystore for `com.flectar.mail`
-    (`ACLDebugProfileDebug.p7b`, `com.flectar.mail.debug.cer`, `release.p12`
-    and `release.p12.pwd`) under `$DEBUG_SIGN_DIR`, by default
-    `$HOME/Documents/ohos/release`; or
+- `hdc` and debug signing material, supplied explicitly:
+  - the AGC debug profile, certificate and keystore through `DEBUG_PROFILE`,
+    `DEBUG_CERT` and `DEBUG_P12` (plus `DEBUG_KEY_ALIAS`, and
+    `DEBUG_KEY_PWD`/`DEBUG_STORE_PWD` or `DEBUG_PWD_FILE`); or
   - a DevEco-created signing material directory (`$SIGN_CFG`, by default
     `$HOME/Documents/ohos/config`, bound to the device UDID), whose store
     passphrase is fetched at build time by the local `sign-huawei.sh` helper.
@@ -104,11 +103,18 @@ APP=mail PROFILE=release sh platform/ohos/scripts/build-hap.sh
 The ACL-enabled profile is required because the app declares
 `ohos.permission.READ_PASTEBOARD`.
 
-Without `RELEASE_SIGN=1` the script signs a debug hap. `APP=mail` uses the
-AGC debug material above when it is present. `DEBUG_PROFILE`, `DEBUG_CERT`,
-`DEBUG_P12`, `DEBUG_KEY_ALIAS`, and `DEBUG_KEY_PWD`/`DEBUG_STORE_PWD` (or
-`DEBUG_PWD_FILE`) select other material explicitly. Otherwise the DevEco
-auto-signing config goes through `sign-huawei.sh`.
+Without `RELEASE_SIGN=1` the script signs a debug hap. Debug material is
+never taken from an assumed path: set `DEBUG_PROFILE`, `DEBUG_CERT` and
+`DEBUG_P12` explicitly, plus `DEBUG_KEY_ALIAS` and
+`DEBUG_KEY_PWD`/`DEBUG_STORE_PWD` (or `DEBUG_PWD_FILE`). Otherwise the
+DevEco auto-signing config goes through `sign-huawei.sh`:
+
+```sh
+DEBUG_PROFILE=/path/to/ACLDebugProfileDebug.p7b \
+DEBUG_CERT=/path/to/com.flectar.mail.debug.cer \
+DEBUG_P12=/path/to/release.p12 DEBUG_PWD_FILE=/path/to/release.p12.pwd \
+APP=mail sh platform/ohos/scripts/build-hap.sh
+```
 
 The selected profile must name the bundle being built. A profile for another
 bundle stops the build before signing (for example, a DevEco config generated

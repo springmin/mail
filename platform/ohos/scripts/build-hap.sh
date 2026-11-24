@@ -6,16 +6,13 @@
 # template selects the native library).
 #
 # Signing modes:
-#   default         Debug signing. APP=mail uses the AGC debug profile kept in
-#                   $DEBUG_SIGN_DIR (default $HOME/Documents/ohos/release) when
-#                   it is there, with DEBUG_CERT, DEBUG_P12 and the password
-#                   from DEBUG_PWD_FILE. For other bundles, or when that
-#                   material is absent, the DevEco auto-signing material under
-#                   $SIGN_CFG goes through the ohos-workload sign-huawei.sh
-#                   helper. In both cases the profile must name $BUNDLE.
-#   DEBUG_PROFILE=  Explicit debug material (with DEBUG_CERT, DEBUG_P12,
-#   DEBUG_CERT=     DEBUG_KEY_ALIAS, DEBUG_KEY_PWD/DEBUG_STORE_PWD or
-#   DEBUG_P12=      DEBUG_PWD_FILE), signed by hap-sign-tool directly.
+#   default         Debug signing. Explicit material is required: set
+#                   DEBUG_PROFILE, DEBUG_CERT and DEBUG_P12 (plus
+#                   DEBUG_KEY_ALIAS, and DEBUG_KEY_PWD/DEBUG_STORE_PWD or
+#                   DEBUG_PWD_FILE). Without them, the DevEco auto-signing
+#                   material under $SIGN_CFG goes through the ohos-workload
+#                   sign-huawei.sh helper. In both cases the profile must name
+#                   $BUNDLE.
 #   RELEASE_SIGN=1  AGC release material passed through the environment
 #                   (RELEASE_P12, RELEASE_CERT, RELEASE_PROFILE, key alias and
 #                   passwords) and applied by hap-sign-tool directly.
@@ -75,10 +72,8 @@ JAVA_HOME="${JAVA_HOME:-$HOME/.harmonybrew/opt/openjdk@17}"
 DEVECO_PROJECT_PROFILE="$HOME/Documents/DevEcoStudioProjects/MyApplication/build-profile.json5"
 SIGN_CFG="${SIGN_CFG:-$HOME/Documents/ohos/config}"
 SIGN_HELPER="${SIGN_HELPER:-$HOME/springsources/ohos-workload/scripts/sign-huawei.sh}"
-# Debug material with the AGC debug profile. The DevEco auto-signing config
-# can belong to another bundle, so the mail app signs with the profile issued
-# for its own bundle. Override DEBUG_* for other material.
-DEBUG_SIGN_DIR="${DEBUG_SIGN_DIR:-$HOME/Documents/ohos/release}"
+# Explicit debug material for the AGC debug profile. No path is assumed here:
+# set DEBUG_PROFILE, DEBUG_CERT and DEBUG_P12 for the bundle being built.
 DEBUG_PROFILE="${DEBUG_PROFILE:-}"
 DEBUG_CERT="${DEBUG_CERT:-}"
 DEBUG_P12="${DEBUG_P12:-}"
@@ -86,13 +81,6 @@ DEBUG_KEY_ALIAS="${DEBUG_KEY_ALIAS:-releasekey}"
 DEBUG_KEY_PWD="${DEBUG_KEY_PWD:-}"
 DEBUG_STORE_PWD="${DEBUG_STORE_PWD:-}"
 DEBUG_PWD_FILE="${DEBUG_PWD_FILE:-}"
-if [ "$APP" = mail ] && [ -z "$DEBUG_PROFILE" ] && [ -z "$DEBUG_CERT" ] && [ -z "$DEBUG_P12" ] \
-    && [ -f "$DEBUG_SIGN_DIR/ACLDebugProfileDebug.p7b" ]; then
-    DEBUG_PROFILE="$DEBUG_SIGN_DIR/ACLDebugProfileDebug.p7b"
-    DEBUG_CERT="$DEBUG_SIGN_DIR/com.flectar.mail.debug.cer"
-    DEBUG_P12="$DEBUG_SIGN_DIR/release.p12"
-    [ -n "$DEBUG_PWD_FILE" ] || DEBUG_PWD_FILE="$DEBUG_SIGN_DIR/release.p12.pwd"
-fi
 HVIGOR_LOG="$BUILD_DIR/hvigor.log"
 
 # The bundle a signed profile names, or empty when the profile cannot be read.
@@ -387,10 +375,10 @@ log "unsigned: $UNSIGNED ($(stat -c%s "$UNSIGNED") bytes)"
 # material supplied through the environment:
 #   RELEASE_P12 (keystore) RELEASE_CERT (app certificate) RELEASE_PROFILE (signed .p7b)
 #   RELEASE_KEY_ALIAS RELEASE_KEY_PWD RELEASE_STORE_PWD
-# Without either, debug material signs the hap: explicit DEBUG_* files (the
-# mail default lives under DEBUG_SIGN_DIR) or the DevEco auto-signing config
-# through sign-huawei.sh. The debug profile must name $BUNDLE. Debug signing
-# is local-only; CI uses SKIP_SIGN=1, so the password never reaches CI.
+# Without either, debug material signs the hap: explicit DEBUG_* files or the
+# DevEco auto-signing config through sign-huawei.sh. The debug profile must
+# name $BUNDLE. Debug signing is local-only; CI uses SKIP_SIGN=1, so the
+# password never reaches CI.
 if [ "${SKIP_SIGN:-0}" = "1" ]; then
     log "SKIP_SIGN=1: keeping the unsigned hap"
     SIGNED="$UNSIGNED"
